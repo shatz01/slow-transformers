@@ -1,5 +1,5 @@
-# device = 'cpu'
-device = 'cuda'
+device = 'cpu'
+# device = 'cuda'
 import torch.nn.functional as F
 from torch import nn
 import torch
@@ -25,7 +25,7 @@ class MSA(nn.Module):
     self.V_embed = nn.Linear(input_dim, embed_dim, bias=False)
     self.out_embed = nn.Linear(embed_dim, embed_dim, bias=False)
 
-  def forward(self, x, v=False):
+  def forward(self, x):
     '''
     x: input of shape (batch_size, max_length, input_dim)
     return: output of shape (batch_size, max_length, embed_dim)
@@ -78,7 +78,7 @@ class ViTLayer(nn.Module):
     assert input_dim == embed_dim
     super().__init__()
     self.layernorm1 = nn.LayerNorm(input_dim)
-    self.msa = MSA(input_dim, input_dim, num_heads)
+    self.msa = MSA(input_dim, embed_dim, num_heads)
     self.w_o_dropout = nn.Dropout(dropout)
     self.layernorm2 = nn.LayerNorm(input_dim)
     self.mlp = nn.Sequential(nn.Linear(input_dim, mlp_hidden_dim),
@@ -87,7 +87,7 @@ class ViTLayer(nn.Module):
                              nn.Linear(mlp_hidden_dim, embed_dim),
                              nn.Dropout(dropout))
 
-  def forward(self, x):
+  def forward(self, x, db=False):
     identity = x
     out = self.layernorm1(x)
     out = self.msa(out)
@@ -104,6 +104,7 @@ class ViT(nn.Module):
 
   def __init__(self, patch_dim, image_dim, num_layers, num_heads, embed_dim, mlp_hidden_dim, num_classes, dropout):
     super().__init__()
+    self.num_heads = num_heads
     self.image_dim = image_dim
     self.patch_dim = patch_dim
     self.input_dim = patch_dim * patch_dim * 3 
@@ -116,12 +117,34 @@ class ViT(nn.Module):
       self.encoder_layers.append(ViTLayer(num_heads, embed_dim, embed_dim, mlp_hidden_dim, dropout))
     self.mlp_head = nn.Linear(embed_dim, num_classes)
     self.layernorm = nn.LayerNorm(embed_dim)
-  
+
   def forward(self, x):
     """x: raw image data (batch_size, channels, rows, cols)"""
 
     h = w = self.image_dim // self.patch_dim
-    pass
+    bs = x.shape[0]
+    x = x.reshape(bs, 3, h, self.patch_dim, w, self.patch_dim) # unroll last 2 dims
+    x = torch.einsum("nchpwq -> nhwpqc", x) # make channels last and put other dims together
+    x = x.reshape(bs, h*w, self.input_dim) # now we have patches (8, 3, 32, 32) -> (8, 64, 48)
+
+    patch_embeddings = self.patch_embedding(x)
+    patch_embeddings = torch.cat([torch.tile(self.cls_token, (bs, 1, 1)),
+                                 patch_embeddings], dim=1) # (8, 64, 192) -> (8, 65, 192)
+    out = patch_embeddings + torch.tile(self.positional_embedding, (bs, 1, 1)) # add (not concat) positional embedding
+    out = self.embedding_dropout(out)
+
+    # we must pad s.t. input length is multiple of num_heads
+    add_len = (self.num_heads - out.shape[1]) % self.num_heads
+    out = torch.cat([out, torch.zeros(bs, add_len, out.shape[2], device=device)], dim=1)
+
+    # run through encoder layers
+    for l in self.encoder_layers:
+      out = l(out, db=True)
+    
+    # # pop off and read our classification token, see what the value is
+    # cls_head = self.layernorm(torch.squeeze(out[:, 0], dim=1))
+    # logits = self.mlp_head(cls_head)
+    # return logits
 
 def get_vit_tiny(num_classes=10, patch_dim=4, image_dim=32):
     return ViT(patch_dim=patch_dim, image_dim=image_dim, num_layers=12, num_heads=3,
@@ -154,11 +177,13 @@ if __name__ == "__main__":
     assert vitlayer_out_shape == (bs, max_num_tokens, embed_dim), "🚨 ERROR"; print("✅ ViTLayer test passed!")
 
     ### Test ViT
-    vit = get_vit_tiny()
-    sample = torch.randn(bs, 3, 32, 32) # example batch of images from cifar
+    vit = get_vit_small()
+    sample = torch.randn(bs, 3, 32, 32) # example batch of images from CIFAR
+    vit(sample)
     # assert vitlayer_out_shape == (bs, max_num_tokens, embed_dim), "🚨 ERROR"; print("✅ ViTLayer test passed!")
 
     ### TRAIN VIT!!!
+    exit()
     trainset = Cifar10Dataset(True)
     trainloader = DataLoader(trainset, shuffle=True, batch_size=bs, num_workers=24) # TODO: Pass our dataset trainset into a torch Dataloader object, with shuffle = True and the batch_size=batch_size, num_workers=2
     testset = Cifar10Dataset(False)
