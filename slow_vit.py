@@ -1,12 +1,17 @@
-device = 'cpu'
-# device = 'cuda'
 import torch.nn.functional as F
 from torch import nn
 import torch
 from data import Cifar10Dataset
 from torch.utils.data import DataLoader, Dataset
+import math
+from tqdm import tqdm
+
+device = 'cpu'
+# device = 'cuda'
+# device = torch.device("mps")
 
 class MSA(nn.Module):
+
   def __init__(self, input_dim, embed_dim, num_heads):
     '''
     input_dim: Dimension of input token embeddings
@@ -66,7 +71,7 @@ class MSA(nn.Module):
 
     # Rejoin Heads! (permute middle two dims back and re-combine last two dims)
     w_V = w_V.permute(0, 2, 1, 3) # (batch_size, max_num_tokens, num_heads, indiv_dim)
-    w_V = w_V.reshape(batch_size, max_num_tokens, embed_dim)
+    w_V = w_V.reshape(batch_size, max_num_tokens, self.embed_dim)
 
     out = self.out_embed(w_V)
     return out
@@ -141,10 +146,10 @@ class ViT(nn.Module):
     for l in self.encoder_layers:
       out = l(out, db=True)
     
-    # # pop off and read our classification token, see what the value is
-    # cls_head = self.layernorm(torch.squeeze(out[:, 0], dim=1))
-    # logits = self.mlp_head(cls_head)
-    # return logits
+    # pop off and read our classification token, see what the value is
+    cls_head = self.layernorm(torch.squeeze(out[:, 0], dim=1))
+    logits = self.mlp_head(cls_head)
+    return logits
 
 def get_vit_tiny(num_classes=10, patch_dim=4, image_dim=32):
     return ViT(patch_dim=patch_dim, image_dim=image_dim, num_layers=12, num_heads=3,
@@ -164,7 +169,7 @@ if __name__ == "__main__":
     num_heads = 5
 
     ### Test MSA (Multiheaded Self Attention)
-    sample = torch.randn(bs, max_num_tokens, input_dim)
+    sample = torch.randn(bs, max_num_tokens, input_dim).to(device)
     msa = MSA(input_dim = input_dim, embed_dim = embed_dim, num_heads=num_heads)
     msa_out_shape = msa(sample).shape
     assert msa_out_shape == (bs, max_num_tokens, embed_dim), "🚨 ERROR"; print("✅ MSA test passed!")
@@ -177,16 +182,77 @@ if __name__ == "__main__":
     assert vitlayer_out_shape == (bs, max_num_tokens, embed_dim), "🚨 ERROR"; print("✅ ViTLayer test passed!")
 
     ### Test ViT
-    vit = get_vit_small()
+    num_classes=10
+    bs = 256
+    vit = get_vit_tiny().to(device)
     sample = torch.randn(bs, 3, 32, 32) # example batch of images from CIFAR
-    vit(sample)
-    # assert vitlayer_out_shape == (bs, max_num_tokens, embed_dim), "🚨 ERROR"; print("✅ ViTLayer test passed!")
+    vit_out_shape = vit(sample).shape
+    assert vit_out_shape == (bs, num_classes), "🚨 ERROR"; print("✅ Full ViT test passed!")
 
     ### TRAIN VIT!!!
-    exit()
-    trainset = Cifar10Dataset(True)
-    trainloader = DataLoader(trainset, shuffle=True, batch_size=bs, num_workers=24) # TODO: Pass our dataset trainset into a torch Dataloader object, with shuffle = True and the batch_size=batch_size, num_workers=2
-    testset = Cifar10Dataset(False)
-    testloader = DataLoader(testset, shuffle=True, batch_size=bs, num_workers=24) # TODO: create a test dataset the same as the train loader but with shuffle=False and the test dataset
-    sample = next(iter(trainloader))
-    print(sample[0].shape)
+    train_dataset = Cifar10Dataset(True)
+    train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=bs, num_workers=12) # TODO: Pass our dataset trainset into a torch Dataloader object, with shuffle = True and the batch_size=batch_size, num_workers=2
+    test_dataset = Cifar10Dataset(False)
+    test_dataloader = DataLoader(test_dataset, shuffle=True, batch_size=bs, num_workers=12) # TODO: create a test dataset the same as the train loader but with shuffle=False and the test dataset
+    lr = 5e-4 * bs / 256
+    num_epochs = 10
+    warmup_frac = 0.1
+    weight_decay = 0.1
+    total_steps = math.ceil(len(train_dataset) * num_epochs)
+    warmup_steps = total_steps * warmup_frac
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(vit.parameters(), lr=lr, betas=(0.9, 0.95), weight_decay=weight_decay)
+    train_losses = []
+    test_losses = []
+    for epoch in range(num_epochs):
+        train_loss = 0.0
+        train_acc = 0.0
+        train_total = 0
+        vit.train()
+        for inputs, labels in tqdm(train_dataloader):
+            """TODO:
+            1. Set inputs and labels to be on device
+            2. zero out our gradients
+            3. pass our inputs through the ViT
+            4. pass our outputs / labels into our loss / criterion
+            5. backpropagate
+            6. step our optimizeer
+            """
+            optimizer.zero_grad()
+            inputs = inputs.to(device)
+            labels = labels.to(device)
+            outputs = vit(inputs)
+            
+            loss = criterion(outputs, labels.long())
+            loss.backward()
+            optimizer.step()
+
+            train_loss += loss.item() * inputs.shape[0]
+            train_acc += torch.sum((torch.argmax(outputs, dim=1) == labels)).item()
+            train_total += inputs.shape[0]
+        train_loss = train_loss / train_total
+        train_acc = train_acc / train_total
+        train_losses.append(train_loss)
+
+        test_loss = 0.0
+        test_acc = 0.0
+        test_total = 0
+        vit.eval()
+        with torch.no_grad():
+            for inputs, labels in test_dataloader:
+                inputs = inputs.to(device)
+                labels = labels.to(device)
+
+                outputs = vit(inputs)
+                loss = criterion(outputs, labels.long())
+
+                test_loss += loss.item() * inputs.shape[0]
+                test_acc += torch.sum((torch.argmax(outputs, dim=1) == labels)).item()
+                test_total += inputs.shape[0]
+        test_loss = test_loss / test_total
+        test_acc = test_acc / test_total
+        test_losses.append(test_loss)
+
+        print(f'[{epoch + 1:2d}] train loss: {train_loss:.3f} | train accuracy: {train_acc:.3f} | test_loss: {test_loss:.3f} | test_accuracy: {test_acc:.3f}')
+
+    print('Finished Training')
