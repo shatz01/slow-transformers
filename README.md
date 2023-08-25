@@ -9,8 +9,14 @@ cd slow-transformers/
 pip install -r requirements.txt
 ```
 
+# Supported Models
+- [x] ViT
+- [ ] Language Classification Transformer
+
+# Supported Datasets
+- [x] cifar
+
 ## TODO / Goals list
-- fix ViT
 - Vanilla transformer (or some language tasks)
 - fsdp/deepspeed 
 - cross attention
