@@ -1,6 +1,8 @@
+pdbpp
 torch
 torchvision
 tqdm
 torchtext
 portalocker>=2.0.0
 scikit-learn
+transformers

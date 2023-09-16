@@ -11,10 +11,11 @@ pip install -r requirements.txt
 
 # Supported Models
 - [x] ViT
-- [ ] Language Classification Transformer
+- [ ] Language Classification Transformer <- Almost works!!!
 
 # Supported Datasets
 - [x] cifar
+- [x] imdb
 
 ## TODO / Goals list
 - Vanilla transformer (or some language tasks)
