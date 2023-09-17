@@ -3,6 +3,8 @@ from torch import nn
 from transformers import DataCollatorWithPadding
 from datasets import load_dataset
 from transformers import BertTokenizer, DataCollatorWithPadding
+from tqdm import tqdm
+import math
 
 class MSA(nn.Module):
 
@@ -98,19 +100,21 @@ class ViTLayer(nn.Module):
     return out2
 
 class LanguageTransformer(nn.Module):
-    def __init__(self, vocab_size, embed_dim, num_heads, num_layers, num_classes, dropout=0.1):
+    def __init__(self, vocab_size, num_layers, num_heads, embed_dim, mlp_hidden_dim, num_classes, dropout=0.1):
         super().__init__()
+        self.num_heads = num_heads
         self.vocab_size = vocab_size
         self.embedding = nn.Embedding(self.vocab_size, embed_dim)
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.embedding_dropout = nn.Dropout(dropout)
         self.encoder_layers = nn.ModuleList([])
         for i in range(num_layers):
-           self.encoder_layers.append(ViTLayer(num_heads, embed_dim, embed_dim, embed_dim, dropout))
+           self.encoder_layers.append(ViTLayer(num_heads, embed_dim, embed_dim, mlp_hidden_dim, dropout))
         self.mlp_head = nn.Linear(embed_dim, num_classes)
         self.layernorm = nn.LayerNorm(embed_dim)
 
     def forward(self, x):
+        bs = x.shape[0]
         out = self.embedding(x)
         out = torch.cat([torch.tile(self.cls_token, (bs, 1, 1)), out], dim=1) # (8, 64, 192) -> (8, 65, 192)
         out = self.embedding_dropout(out)
@@ -128,12 +132,12 @@ class LanguageTransformer(nn.Module):
         logits = self.mlp_head(cls_head)
         return logits
 
-def get_vit_tiny(vocab_size, num_classes=10, patch_dim=4, image_dim=32):
-    return LanguageTransformer(vocab_size, num_layers=12, num_heads=3,
+def get_vit_tiny(vocab_size=100, num_classes=10):
+    return LanguageTransformer(vocab_size=vocab_size, num_layers=12, num_heads=3,
               embed_dim=192, mlp_hidden_dim=768, num_classes=num_classes, dropout=0.1)
 
-def get_vit_small(vocab_size, num_classes=10, patch_dim=4, image_dim=32):
-    return LanguageTransformer(vocab_size, num_layers=12, num_heads=6,
+def get_vit_small(vocab_size=100, num_classes=10):
+    return LanguageTransformer(vocab_size=vocab_size, num_layers=12, num_heads=6,
                embed_dim=384, mlp_hidden_dim=1536, num_classes=num_classes, dropout=0.1)
     
 
@@ -162,15 +166,9 @@ if __name__ == '__main__':
     num_classes=10
     bs = 256
     sample = torch.randint(0, 100, (bs, max_num_tokens))
-    model = LanguageTransformer(vocab_size=100, embed_dim=128, num_heads=4, num_layers=4, num_classes=num_classes)
+    model = get_vit_tiny(vocab_size=100, num_classes=num_classes)
     out = model(sample)
-    print(f"out shape: {out.shape}")
-    # assert vitlayer_out_shape == (bs, max_num_tokens, embed_dim), "🚨 ERROR"; print("✅ ViTLayer test passed!")
-    exit()
-
-    # so input looks like (batch_size, sequence_length)
-
-
+    assert out.shape == (bs, num_classes), "🚨 ERROR"; print("✅ LanguageTransformer test passed!")
 
     ### Test with real data!
     imdb_dataset = load_dataset("imdb")
@@ -182,4 +180,39 @@ if __name__ == '__main__':
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
     train_dataloader = torch.utils.data.DataLoader(tokenized_datasets["train"], batch_size=8, collate_fn=data_collator)
     test_dataloader = torch.utils.data.DataLoader(tokenized_datasets["test"], batch_size=8, collate_fn=data_collator)
-    import pdb; pdb.set_trace()
+    lr = 5e-4 * bs / 256
+    num_epochs = 10
+    warmup_frac = 0.1
+    weight_decay = 0.1
+    total_steps = math.ceil(len(tokenized_datasets["train"]) * num_epochs)
+    warmup_steps = total_steps * warmup_frac
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(vit.parameters(), lr=lr, betas=(0.9, 0.95), weight_decay=weight_decay)
+    train_losses = []
+    test_losses = []
+
+    # get vocab size of dataset
+    vocab_size = len(tokenizer.get_vocab())
+    model = get_vit_tiny(vocab_size=vocab_size, num_classes=10)
+
+    for epoch in range(num_epochs):
+      train_loss = 0.0
+      train_acc = 0.0
+      train_total = 0
+      for batch in tqdm(train_dataloader):
+          inputs = batch['input_ids']
+          labels = batch['labels']
+          outputs = model(inputs)
+
+          loss = criterion(outputs, labels)
+          loss.backward()
+          optimizer.step()
+
+          train_loss += loss.item() * inputs.shape[0]
+          train_acc += torch.sum((torch.argmax(outputs, dim=1) == labels)).item()
+          train_total += inputs.shape[0]
+
+      train_loss = train_loss / train_total
+      train_acc = train_acc / train_total
+      train_losses.append(train_loss)
+      print(f'[{epoch + 1:2d}] train loss: {train_loss:.3f} | train accuracy: {train_acc:.3f}') 
