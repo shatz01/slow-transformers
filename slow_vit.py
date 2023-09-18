@@ -133,8 +133,7 @@ class ViT(nn.Module):
     x = x.reshape(bs, h*w, self.input_dim) # now we have patches (8, 3, 32, 32) -> (8, 64, 48)
 
     patch_embeddings = self.patch_embedding(x)
-    patch_embeddings = torch.cat([torch.tile(self.cls_token, (bs, 1, 1)),
-                                 patch_embeddings], dim=1) # (8, 64, 192) -> (8, 65, 192)
+    patch_embeddings = torch.cat([torch.tile(self.cls_token, (bs, 1, 1)), patch_embeddings], dim=1) # (8, 64, 192) -> (8, 65, 192)
     out = patch_embeddings + torch.tile(self.positional_embedding, (bs, 1, 1)) # add (not concat) positional embedding
     out = self.embedding_dropout(out)
 
@@ -210,14 +209,6 @@ if __name__ == "__main__":
         train_total = 0
         vit.train()
         for inputs, labels in tqdm(train_dataloader):
-            """TODO:
-            1. Set inputs and labels to be on device
-            2. zero out our gradients
-            3. pass our inputs through the ViT
-            4. pass our outputs / labels into our loss / criterion
-            5. backpropagate
-            6. step our optimizeer
-            """
             optimizer.zero_grad()
             inputs = inputs.to(device)
             labels = labels.to(device)

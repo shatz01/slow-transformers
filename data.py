@@ -4,6 +4,15 @@ import torchvision.transforms as transforms
 import torchvision
 import math
 import torch.optim as optim
+import torchtext
+
+from datasets import load_dataset
+from tokenizers import Tokenizer
+from tokenizers.models import BPE
+from tokenizers.trainers import BpeTrainer
+from tokenizers.pre_tokenizers import Whitespace
+
+
 
 class Cifar10Dataset(Dataset):
     def __init__(self, train):
@@ -16,7 +25,7 @@ class Cifar10Dataset(Dataset):
                                                 transforms.ToTensor(),
                                                 transforms.Normalize(self.cifar10_mean, self.cifar10_std)
                                             ])
-        self.dataset = torchvision.datasets.CIFAR10(root='./SSL-Vision/data',
+        self.dataset = torchvision.datasets.CIFAR10(root='./cifar_data',
                                                     train=train,
                                                     download=True)
     def __len__(self):

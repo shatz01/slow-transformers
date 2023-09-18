@@ -187,13 +187,11 @@ if __name__ == '__main__':
     total_steps = math.ceil(len(tokenized_datasets["train"]) * num_epochs)
     warmup_steps = total_steps * warmup_frac
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(vit.parameters(), lr=lr, betas=(0.9, 0.95), weight_decay=weight_decay)
-    train_losses = []
-    test_losses = []
-
-    # get vocab size of dataset
     vocab_size = len(tokenizer.get_vocab())
     model = get_vit_tiny(vocab_size=vocab_size, num_classes=10)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, betas=(0.9, 0.95), weight_decay=weight_decay)
+    train_losses = []
+    test_losses = []
 
     for epoch in range(num_epochs):
       train_loss = 0.0
