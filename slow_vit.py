@@ -6,9 +6,9 @@ from torch.utils.data import DataLoader, Dataset
 import math
 from tqdm import tqdm
 
-device = 'cpu'
+# device = 'cpu'
 # device = 'cuda'
-# device = torch.device("mps")
+device = torch.device("mps")
 
 class MSA(nn.Module):
 
@@ -168,37 +168,47 @@ if __name__ == "__main__":
     num_heads = 5
 
     ### Test MSA (Multiheaded Self Attention)
-    sample = torch.randn(bs, max_num_tokens, input_dim).to(device)
-    msa = MSA(input_dim = input_dim, embed_dim = embed_dim, num_heads=num_heads)
+    sample = torch.randn(bs, max_num_tokens, input_dim, device=device)
+    msa = MSA(input_dim = input_dim, embed_dim = embed_dim, num_heads=num_heads).to(device)
     msa_out_shape = msa(sample).shape
     assert msa_out_shape == (bs, max_num_tokens, embed_dim), "🚨 ERROR"; print("✅ MSA test passed!")
+    del msa
 
     ### Test ViTLayer
     mlp_hidden_dim = 128
-    sample = torch.randn(bs, max_num_tokens, embed_dim)
-    vitlayer = ViTLayer(num_heads=num_heads, input_dim=embed_dim, embed_dim=embed_dim, mlp_hidden_dim=mlp_hidden_dim)
+    sample = torch.randn(bs, max_num_tokens, embed_dim, device=device)
+    vitlayer = ViTLayer(num_heads=num_heads, input_dim=embed_dim, embed_dim=embed_dim, mlp_hidden_dim=mlp_hidden_dim).to(device)
     vitlayer_out_shape = vitlayer(sample).shape
     assert vitlayer_out_shape == (bs, max_num_tokens, embed_dim), "🚨 ERROR"; print("✅ ViTLayer test passed!")
+    del vitlayer
 
     ### Test ViT
     num_classes=10
-    bs = 256
+    bs = 512
     vit = get_vit_tiny().to(device)
-    sample = torch.randn(bs, 3, 32, 32) # example batch of images from CIFAR
+    sample = torch.randn(bs, 3, 32, 32, device=device) # example batch of images from CIFAR
     vit_out_shape = vit(sample).shape
     assert vit_out_shape == (bs, num_classes), "🚨 ERROR"; print("✅ Full ViT test passed!")
+    del vit
 
-    ### TRAIN VIT!!!
+    ########### ######### TRAIN VIT!!! ########## ##########
+    # prepare dataset/dataloader
     train_dataset = Cifar10Dataset(True)
-    train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=bs, num_workers=12) # TODO: Pass our dataset trainset into a torch Dataloader object, with shuffle = True and the batch_size=batch_size, num_workers=2
+    train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=bs, num_workers=10) # TODO: Pass our dataset trainset into a torch Dataloader object, with shuffle = True and the batch_size=batch_size, num_workers=2
     test_dataset = Cifar10Dataset(False)
-    test_dataloader = DataLoader(test_dataset, shuffle=True, batch_size=bs, num_workers=12) # TODO: create a test dataset the same as the train loader but with shuffle=False and the test dataset
+    test_dataloader = DataLoader(test_dataset, shuffle=True, batch_size=bs, num_workers=10) # TODO: create a test dataset the same as the train loader but with shuffle=False and the test dataset
+
+    # hyperparams
     lr = 5e-4 * bs / 256
     num_epochs = 10
     warmup_frac = 0.1
     weight_decay = 0.1
     total_steps = math.ceil(len(train_dataset) * num_epochs)
     warmup_steps = total_steps * warmup_frac
+
+    # model
+    vit = get_vit_tiny().to(device)
+    vit.train()
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(vit.parameters(), lr=lr, betas=(0.9, 0.95), weight_decay=weight_decay)
     train_losses = []
@@ -207,7 +217,6 @@ if __name__ == "__main__":
         train_loss = 0.0
         train_acc = 0.0
         train_total = 0
-        vit.train()
         for inputs, labels in tqdm(train_dataloader):
             optimizer.zero_grad()
             inputs = inputs.to(device)
