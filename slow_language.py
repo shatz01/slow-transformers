@@ -1,10 +1,15 @@
 import torch
 from torch import nn
+from tqdm import tqdm
+import math
+
 from transformers import DataCollatorWithPadding
 from datasets import load_dataset
 from transformers import BertTokenizer, DataCollatorWithPadding
-from tqdm import tqdm
-import math
+
+# device = 'cpu'
+# device = 'cuda'
+device = torch.device("mps")
 
 class MSA(nn.Module):
 
@@ -72,7 +77,7 @@ class MSA(nn.Module):
     out = self.out_embed(w_V)
     return out
 
-class ViTLayer(nn.Module):
+class TransformerLayer(nn.Module):
 
   def __init__(self, num_heads, input_dim, embed_dim, mlp_hidden_dim, dropout=0.1):
     assert input_dim == embed_dim
@@ -100,48 +105,51 @@ class ViTLayer(nn.Module):
     return out2
 
 class LanguageTransformer(nn.Module):
-    def __init__(self, vocab_size, num_layers, num_heads, embed_dim, mlp_hidden_dim, num_classes, dropout=0.1):
-        super().__init__()
-        self.num_heads = num_heads
-        self.vocab_size = vocab_size
-        self.embedding = nn.Embedding(self.vocab_size, embed_dim)
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-        self.embedding_dropout = nn.Dropout(dropout)
-        self.encoder_layers = nn.ModuleList([])
-        for i in range(num_layers):
-           self.encoder_layers.append(ViTLayer(num_heads, embed_dim, embed_dim, mlp_hidden_dim, dropout))
-        self.mlp_head = nn.Linear(embed_dim, num_classes)
-        self.layernorm = nn.LayerNorm(embed_dim)
 
-    def forward(self, x):
-        bs = x.shape[0]
-        out = self.embedding(x)
-        out = torch.cat([torch.tile(self.cls_token, (bs, 1, 1)), out], dim=1) # (8, 64, 192) -> (8, 65, 192)
-        out = self.embedding_dropout(out)
+  def __init__(self, vocab_size, num_layers, num_heads, embed_dim, mlp_hidden_dim, num_classes, dropout):
+    super().__init__()
+    self.num_heads = num_heads
+    self.vocab_size = vocab_size
+    self.embedding = nn.Embedding(self.vocab_size, embed_dim)
+    self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+    self.embedding_dropout = nn.Dropout(dropout)
+    self.encoder_layers = nn.ModuleList([])
+    for i in range(num_layers):
+      self.encoder_layers.append(TransformerLayer(num_heads, embed_dim, embed_dim, mlp_hidden_dim, dropout))
+    self.mlp_head = nn.Linear(embed_dim, num_classes)
+    self.layernorm = nn.LayerNorm(embed_dim)
 
-        # we must pad s.t. input length is multiple of num_heads
-        add_len = (self.num_heads - out.shape[1]) % self.num_heads
-        out = torch.cat([out, torch.zeros(bs, add_len, out.shape[2])], dim=1)
+  def forward(self, x):
+    """x: encoded sentences (batch_size, max_num_tokens)"""
+    device = x.device
+    bs = x.shape[0]
+    out = self.embedding(x)
+    out = torch.cat([torch.tile(self.cls_token, (bs, 1, 1)), out], dim=1) # (8, 64, 192) -> (8, 65, 192)
+    out = self.embedding_dropout(out)
 
-        # run through encoder layers
-        for l in self.encoder_layers:
-            out = l(out)
+    # we must pad s.t. input length is multiple of num_heads
+    add_len = (self.num_heads - out.shape[1]) % self.num_heads
+    out = torch.cat([out, torch.zeros(bs, add_len, out.shape[2], device=device)], dim=1)
 
-        # pop off and read our classification token, see what the value is
-        cls_head = self.layernorm(torch.squeeze(out[:, 0], dim=1))
-        logits = self.mlp_head(cls_head)
-        return logits
+    # run through encoder layers
+    for l in self.encoder_layers:
+      out = l(out)
 
-def get_vit_tiny(vocab_size=100, num_classes=10):
+    # pop off and read our classification token, see what the value is
+    cls_head = self.layernorm(torch.squeeze(out[:, 0], dim=1))
+    logits = self.mlp_head(cls_head)
+    return logits
+
+def get_tiny_model(vocab_size=100, num_classes=10):
     return LanguageTransformer(vocab_size=vocab_size, num_layers=12, num_heads=3,
               embed_dim=192, mlp_hidden_dim=768, num_classes=num_classes, dropout=0.1)
 
-def get_vit_small(vocab_size=100, num_classes=10):
+def get_small_model(vocab_size=100, num_classes=10):
     return LanguageTransformer(vocab_size=vocab_size, num_layers=12, num_heads=6,
                embed_dim=384, mlp_hidden_dim=1536, num_classes=num_classes, dropout=0.1)
     
-
-if __name__ == '__main__':
+if __name__ == "__main__":
+    print("🐌 running slowly!...")
 
     bs = 8
     max_num_tokens = 50
@@ -150,45 +158,54 @@ if __name__ == '__main__':
     num_heads = 5
 
     ### Test MSA (Multiheaded Self Attention)
-    sample = torch.randn(bs, max_num_tokens, input_dim)
-    msa = MSA(input_dim = input_dim, embed_dim = embed_dim, num_heads=num_heads)
+    sample = torch.randn(bs, max_num_tokens, input_dim, device=device)
+    msa = MSA(input_dim = input_dim, embed_dim = embed_dim, num_heads=num_heads).to(device)
     msa_out_shape = msa(sample).shape
     assert msa_out_shape == (bs, max_num_tokens, embed_dim), "🚨 ERROR"; print("✅ MSA test passed!")
+    del msa
 
-    ### Test ViTLayer
+    ### Test TransformerLayer
     mlp_hidden_dim = 128
-    sample = torch.randn(bs, max_num_tokens, embed_dim)
-    vitlayer = ViTLayer(num_heads=num_heads, input_dim=embed_dim, embed_dim=embed_dim, mlp_hidden_dim=mlp_hidden_dim)
+    sample = torch.randn(bs, max_num_tokens, embed_dim, device=device)
+    vitlayer = TransformerLayer(num_heads=num_heads, input_dim=embed_dim, embed_dim=embed_dim, mlp_hidden_dim=mlp_hidden_dim).to(device)
     vitlayer_out_shape = vitlayer(sample).shape
-    assert vitlayer_out_shape == (bs, max_num_tokens, embed_dim), "🚨 ERROR"; print("✅ ViTLayer test passed!")
+    assert vitlayer_out_shape == (bs, max_num_tokens, embed_dim), "🚨 ERROR"; print("✅ TransformerLayer test passed!")
+    del vitlayer
 
     ### Test LanguageTransformer
     num_classes=10
-    bs = 256
-    sample = torch.randint(0, 100, (bs, max_num_tokens))
-    model = get_vit_tiny(vocab_size=100, num_classes=num_classes)
+    bs = 16
+    model = get_tiny_model(vocab_size=100, num_classes=num_classes).to(device)
+    sample = torch.randint(0, 100, (bs, max_num_tokens), device=device)
     out = model(sample)
     assert out.shape == (bs, num_classes), "🚨 ERROR"; print("✅ LanguageTransformer test passed!")
+    del model
 
-    ### Test with real data!
+    ########### ######### TRAIN Model!!! ########## ##########
+
+    # prepare dataset/dataloader
     imdb_dataset = load_dataset("imdb")
     tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
     def tokenize_function(examples):
-        return tokenizer(examples['text'], truncation=True, padding=False)
+      return tokenizer(examples['text'], truncation=True, padding=False)
     tokenized_datasets = imdb_dataset.map(tokenize_function, batched=True, num_proc=32)
     tokenized_datasets = tokenized_datasets.remove_columns(['text'])
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
-    train_dataloader = torch.utils.data.DataLoader(tokenized_datasets["train"], batch_size=8, collate_fn=data_collator)
-    test_dataloader = torch.utils.data.DataLoader(tokenized_datasets["test"], batch_size=8, collate_fn=data_collator)
+    train_dataloader = torch.utils.data.DataLoader(tokenized_datasets["train"], batch_size=bs, collate_fn=data_collator, num_workers=10)
+    test_dataloader = torch.utils.data.DataLoader(tokenized_datasets["test"], batch_size=bs, collate_fn=data_collator, num_workers=10)
+
+    # hyperparams
     lr = 5e-4 * bs / 256
     num_epochs = 10
     warmup_frac = 0.1
     weight_decay = 0.1
     total_steps = math.ceil(len(tokenized_datasets["train"]) * num_epochs)
     warmup_steps = total_steps * warmup_frac
+
+    # model
+    model = get_tiny_model(vocab_size=len(tokenizer.get_vocab()), num_classes=10).to(device)
+    model.train()
     criterion = nn.CrossEntropyLoss()
-    vocab_size = len(tokenizer.get_vocab())
-    model = get_vit_tiny(vocab_size=vocab_size, num_classes=10)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, betas=(0.9, 0.95), weight_decay=weight_decay)
     train_losses = []
     test_losses = []
@@ -198,19 +215,40 @@ if __name__ == '__main__':
       train_acc = 0.0
       train_total = 0
       for batch in tqdm(train_dataloader):
-          inputs = batch['input_ids']
-          labels = batch['labels']
-          outputs = model(inputs)
+        inputs = batch['input_ids'].to(device)
+        labels = batch['labels'].to(device)
+        optimizer.zero_grad()
+        outputs = model(inputs)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
 
-          loss = criterion(outputs, labels)
-          loss.backward()
-          optimizer.step()
-
-          train_loss += loss.item() * inputs.shape[0]
-          train_acc += torch.sum((torch.argmax(outputs, dim=1) == labels)).item()
-          train_total += inputs.shape[0]
-
+        train_loss += loss.item() * inputs.shape[0]
+        train_acc += torch.sum((torch.argmax(outputs, dim=1) == labels)).item()
+        train_total += inputs.shape[0]
       train_loss = train_loss / train_total
       train_acc = train_acc / train_total
       train_losses.append(train_loss)
-      print(f'[{epoch + 1:2d}] train loss: {train_loss:.3f} | train accuracy: {train_acc:.3f}') 
+
+      test_loss = 0.0
+      test_acc = 0.0
+      test_total = 0
+      model.eval()
+      with torch.no_grad():
+          for batch in test_dataloader:
+              inputs = batch['input_ids'].to(device)
+              labels = batch['labels'].to(device)
+
+              outputs = model(inputs)
+              loss = criterion(outputs, labels.long())
+
+              test_loss += loss.item() * inputs.shape[0]
+              test_acc += torch.sum((torch.argmax(outputs, dim=1) == labels)).item()
+              test_total += inputs.shape[0]
+      test_loss = test_loss / test_total
+      test_acc = test_acc / test_total
+      test_losses.append(test_loss)
+
+      print(f'[{epoch + 1:2d}] train loss: {train_loss:.3f} | train accuracy: {train_acc:.3f} | test_loss: {test_loss:.3f} | test_accuracy: {test_acc:.3f}')
+
+    print("Finished Training")

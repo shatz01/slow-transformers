@@ -1,10 +1,9 @@
-import torch.nn.functional as F
-from torch import nn
 import torch
-from data import Cifar10Dataset
-from torch.utils.data import DataLoader, Dataset
-import math
+from torch import nn
 from tqdm import tqdm
+import math
+
+from data import Cifar10Dataset
 
 # device = 'cpu'
 # device = 'cuda'
@@ -76,8 +75,7 @@ class MSA(nn.Module):
     out = self.out_embed(w_V)
     return out
 
-
-class ViTLayer(nn.Module):
+class TransformerLayer(nn.Module):
 
   def __init__(self, num_heads, input_dim, embed_dim, mlp_hidden_dim, dropout=0.1):
     assert input_dim == embed_dim
@@ -92,7 +90,7 @@ class ViTLayer(nn.Module):
                              nn.Linear(mlp_hidden_dim, embed_dim),
                              nn.Dropout(dropout))
 
-  def forward(self, x, db=False):
+  def forward(self, x):
     identity = x
     out = self.layernorm1(x)
     out = self.msa(out)
@@ -103,7 +101,6 @@ class ViTLayer(nn.Module):
     out2 = self.mlp(out2)
     out2 += identity
     return out2
-
 
 class ViT(nn.Module):
 
@@ -119,19 +116,18 @@ class ViT(nn.Module):
     self.embedding_dropout = nn.Dropout(dropout)
     self.encoder_layers = nn.ModuleList([])
     for i in range(num_layers):
-      self.encoder_layers.append(ViTLayer(num_heads, embed_dim, embed_dim, mlp_hidden_dim, dropout))
+      self.encoder_layers.append(TransformerLayer(num_heads, embed_dim, embed_dim, mlp_hidden_dim, dropout))
     self.mlp_head = nn.Linear(embed_dim, num_classes)
     self.layernorm = nn.LayerNorm(embed_dim)
 
   def forward(self, x):
     """x: raw image data (batch_size, channels, rows, cols)"""
-
-    h = w = self.image_dim // self.patch_dim
+    device = x.device
     bs = x.shape[0]
+    h = w = self.image_dim // self.patch_dim
     x = x.reshape(bs, 3, h, self.patch_dim, w, self.patch_dim) # unroll last 2 dims
     x = torch.einsum("nchpwq -> nhwpqc", x) # make channels last and put other dims together
     x = x.reshape(bs, h*w, self.input_dim) # now we have patches (8, 3, 32, 32) -> (8, 64, 48)
-
     patch_embeddings = self.patch_embedding(x)
     patch_embeddings = torch.cat([torch.tile(self.cls_token, (bs, 1, 1)), patch_embeddings], dim=1) # (8, 64, 192) -> (8, 65, 192)
     out = patch_embeddings + torch.tile(self.positional_embedding, (bs, 1, 1)) # add (not concat) positional embedding
@@ -143,18 +139,18 @@ class ViT(nn.Module):
 
     # run through encoder layers
     for l in self.encoder_layers:
-      out = l(out, db=True)
-    
+      out = l(out)
+
     # pop off and read our classification token, see what the value is
     cls_head = self.layernorm(torch.squeeze(out[:, 0], dim=1))
     logits = self.mlp_head(cls_head)
     return logits
 
-def get_vit_tiny(num_classes=10, patch_dim=4, image_dim=32):
+def get_tiny_model(num_classes=10, patch_dim=4, image_dim=32):
     return ViT(patch_dim=patch_dim, image_dim=image_dim, num_layers=12, num_heads=3,
               embed_dim=192, mlp_hidden_dim=768, num_classes=num_classes, dropout=0.1)
 
-def get_vit_small(num_classes=10, patch_dim=4, image_dim=32):
+def get_small_model(num_classes=10, patch_dim=4, image_dim=32):
     return ViT(patch_dim=patch_dim, image_dim=image_dim, num_layers=12, num_heads=6,
                embed_dim=384, mlp_hidden_dim=1536, num_classes=num_classes, dropout=0.1)
     
@@ -174,29 +170,30 @@ if __name__ == "__main__":
     assert msa_out_shape == (bs, max_num_tokens, embed_dim), "🚨 ERROR"; print("✅ MSA test passed!")
     del msa
 
-    ### Test ViTLayer
+    ### Test TransformerLayer
     mlp_hidden_dim = 128
     sample = torch.randn(bs, max_num_tokens, embed_dim, device=device)
-    vitlayer = ViTLayer(num_heads=num_heads, input_dim=embed_dim, embed_dim=embed_dim, mlp_hidden_dim=mlp_hidden_dim).to(device)
+    vitlayer = TransformerLayer(num_heads=num_heads, input_dim=embed_dim, embed_dim=embed_dim, mlp_hidden_dim=mlp_hidden_dim).to(device)
     vitlayer_out_shape = vitlayer(sample).shape
-    assert vitlayer_out_shape == (bs, max_num_tokens, embed_dim), "🚨 ERROR"; print("✅ ViTLayer test passed!")
+    assert vitlayer_out_shape == (bs, max_num_tokens, embed_dim), "🚨 ERROR"; print("✅ TransformerLayer test passed!")
     del vitlayer
 
     ### Test ViT
     num_classes=10
-    bs = 512
-    vit = get_vit_tiny().to(device)
+    bs = 16
+    model = get_tiny_model().to(device)
     sample = torch.randn(bs, 3, 32, 32, device=device) # example batch of images from CIFAR
-    vit_out_shape = vit(sample).shape
-    assert vit_out_shape == (bs, num_classes), "🚨 ERROR"; print("✅ Full ViT test passed!")
-    del vit
+    out = model(sample)
+    assert out.shape == (bs, num_classes), "🚨 ERROR"; print("✅ Full ViT test passed!")
+    del model
 
-    ########### ######### TRAIN VIT!!! ########## ##########
+    ########### ######### TRAIN Model!!! ########## ##########
+
     # prepare dataset/dataloader
     train_dataset = Cifar10Dataset(True)
-    train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=bs, num_workers=10) # TODO: Pass our dataset trainset into a torch Dataloader object, with shuffle = True and the batch_size=batch_size, num_workers=2
+    train_dataloader = torch.utils.data.DataLoader(train_dataset, shuffle=True, batch_size=bs, num_workers=10) # TODO: Pass our dataset trainset into a torch Dataloader object, with shuffle = True and the batch_size=batch_size, num_workers=2
     test_dataset = Cifar10Dataset(False)
-    test_dataloader = DataLoader(test_dataset, shuffle=True, batch_size=bs, num_workers=10) # TODO: create a test dataset the same as the train loader but with shuffle=False and the test dataset
+    test_dataloader = torch.utils.data.DataLoader(test_dataset, shuffle=True, batch_size=bs, num_workers=10) # TODO: create a test dataset the same as the train loader but with shuffle=False and the test dataset
 
     # hyperparams
     lr = 5e-4 * bs / 256
@@ -207,52 +204,53 @@ if __name__ == "__main__":
     warmup_steps = total_steps * warmup_frac
 
     # model
-    vit = get_vit_tiny().to(device)
-    vit.train()
+    model = get_tiny_model().to(device)
+    model.train()
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(vit.parameters(), lr=lr, betas=(0.9, 0.95), weight_decay=weight_decay)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, betas=(0.9, 0.95), weight_decay=weight_decay)
     train_losses = []
     test_losses = []
+
     for epoch in range(num_epochs):
-        train_loss = 0.0
-        train_acc = 0.0
-        train_total = 0
-        for inputs, labels in tqdm(train_dataloader):
-            optimizer.zero_grad()
-            inputs = inputs.to(device)
-            labels = labels.to(device)
-            outputs = vit(inputs)
-            
-            loss = criterion(outputs, labels.long())
-            loss.backward()
-            optimizer.step()
+      train_loss = 0.0
+      train_acc = 0.0
+      train_total = 0
+      for batch in tqdm(train_dataloader):
+        inputs, labels = batch
+        inputs = inputs.to(device)
+        labels = labels.to(device)
+        optimizer.zero_grad()
+        outputs = model(inputs)
+        loss = criterion(outputs, labels.long())
+        loss.backward()
+        optimizer.step()
 
-            train_loss += loss.item() * inputs.shape[0]
-            train_acc += torch.sum((torch.argmax(outputs, dim=1) == labels)).item()
-            train_total += inputs.shape[0]
-        train_loss = train_loss / train_total
-        train_acc = train_acc / train_total
-        train_losses.append(train_loss)
+        train_loss += loss.item() * inputs.shape[0]
+        train_acc += torch.sum((torch.argmax(outputs, dim=1) == labels)).item()
+        train_total += inputs.shape[0]
+      train_loss = train_loss / train_total
+      train_acc = train_acc / train_total
+      train_losses.append(train_loss)
 
-        test_loss = 0.0
-        test_acc = 0.0
-        test_total = 0
-        vit.eval()
-        with torch.no_grad():
-            for inputs, labels in test_dataloader:
-                inputs = inputs.to(device)
-                labels = labels.to(device)
+      test_loss = 0.0
+      test_acc = 0.0
+      test_total = 0
+      model.eval()
+      with torch.no_grad():
+          for inputs, labels in test_dataloader:
+              inputs = inputs.to(device)
+              labels = labels.to(device)
 
-                outputs = vit(inputs)
-                loss = criterion(outputs, labels.long())
+              outputs = model(inputs)
+              loss = criterion(outputs, labels.long())
 
-                test_loss += loss.item() * inputs.shape[0]
-                test_acc += torch.sum((torch.argmax(outputs, dim=1) == labels)).item()
-                test_total += inputs.shape[0]
-        test_loss = test_loss / test_total
-        test_acc = test_acc / test_total
-        test_losses.append(test_loss)
+              test_loss += loss.item() * inputs.shape[0]
+              test_acc += torch.sum((torch.argmax(outputs, dim=1) == labels)).item()
+              test_total += inputs.shape[0]
+      test_loss = test_loss / test_total
+      test_acc = test_acc / test_total
+      test_losses.append(test_loss)
 
-        print(f'[{epoch + 1:2d}] train loss: {train_loss:.3f} | train accuracy: {train_acc:.3f} | test_loss: {test_loss:.3f} | test_accuracy: {test_acc:.3f}')
+      print(f'[{epoch + 1:2d}] train loss: {train_loss:.3f} | train accuracy: {train_acc:.3f} | test_loss: {test_loss:.3f} | test_accuracy: {test_acc:.3f}')
 
-    print('Finished Training')
+    print("Finished Training")
