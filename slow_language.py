@@ -203,7 +203,7 @@ if __name__ == "__main__":
     model = get_tiny_model(vocab_size=len(tokenizer.get_vocab()), num_classes=10).to(device)
     model.train()
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0.1)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     train_losses = []
     test_losses = []
 
