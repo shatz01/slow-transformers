@@ -1,3 +1,4 @@
+wandb
 pdbpp
 torch
 torchvision
@@ -6,3 +7,4 @@ torchtext
 portalocker>=2.0.0
 scikit-learn
 transformers
+datasets

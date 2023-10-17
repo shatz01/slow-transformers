@@ -8,8 +8,8 @@ from datasets import load_dataset
 from transformers import BertTokenizer, DataCollatorWithPadding
 
 # device = 'cpu'
-# device = 'cuda'
-device = torch.device("mps")
+device = 'cuda:0'
+# device = torch.device("mps")
 
 class MSA(nn.Module):
 
@@ -174,7 +174,7 @@ if __name__ == "__main__":
 
     ### Test LanguageTransformer
     num_classes=10
-    bs = 16
+    bs = 128
     model = get_tiny_model(vocab_size=100, num_classes=num_classes).to(device)
     sample = torch.randint(0, 100, (bs, max_num_tokens), device=device)
     out = model(sample)
@@ -191,22 +191,19 @@ if __name__ == "__main__":
     tokenized_datasets = imdb_dataset.map(tokenize_function, batched=True, num_proc=32)
     tokenized_datasets = tokenized_datasets.remove_columns(['text'])
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
-    train_dataloader = torch.utils.data.DataLoader(tokenized_datasets["train"], batch_size=bs, collate_fn=data_collator, num_workers=10)
+    train_dataloader = torch.utils.data.DataLoader(tokenized_datasets["train"], batch_size=bs, collate_fn=data_collator, num_workers=10, shuffle=True)
     test_dataloader = torch.utils.data.DataLoader(tokenized_datasets["test"], batch_size=bs, collate_fn=data_collator, num_workers=10)
 
     # hyperparams
     lr = 5e-4 * bs / 256
     num_epochs = 10
     warmup_frac = 0.1
-    weight_decay = 0.1
-    total_steps = math.ceil(len(tokenized_datasets["train"]) * num_epochs)
-    warmup_steps = total_steps * warmup_frac
 
     # model
     model = get_tiny_model(vocab_size=len(tokenizer.get_vocab()), num_classes=10).to(device)
     model.train()
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, betas=(0.9, 0.95), weight_decay=weight_decay)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0.1)
     train_losses = []
     test_losses = []
 

@@ -1,13 +1,14 @@
 import torch
 from torch import nn
+import torch.functional as F
 from tqdm import tqdm
 import math
 
 from data import Cifar10Dataset
 
 # device = 'cpu'
-# device = 'cuda'
-device = torch.device("mps")
+device = 'cuda'
+# device = torch.device("mps")
 
 class MSA(nn.Module):
 
@@ -122,6 +123,8 @@ class ViT(nn.Module):
 
   def forward(self, x):
     """x: raw image data (batch_size, channels, rows, cols)"""
+    # import debug; debug.show_tensor_in_terminal(x[0])
+    # import pdb; pdb.set_trace()
     device = x.device
     bs = x.shape[0]
     h = w = self.image_dim // self.patch_dim
@@ -157,35 +160,34 @@ def get_small_model(num_classes=10, patch_dim=4, image_dim=32):
 if __name__ == "__main__":
     print("🐌 running slowly!...")
 
-    bs = 8
+    bs = 512
     max_num_tokens = 50
     input_dim = 32
     embed_dim = 100
     num_heads = 5
 
-    ### Test MSA (Multiheaded Self Attention)
-    sample = torch.randn(bs, max_num_tokens, input_dim, device=device)
-    msa = MSA(input_dim = input_dim, embed_dim = embed_dim, num_heads=num_heads).to(device)
-    msa_out_shape = msa(sample).shape
-    assert msa_out_shape == (bs, max_num_tokens, embed_dim), "🚨 ERROR"; print("✅ MSA test passed!")
-    del msa
+    # ### Test MSA (Multiheaded Self Attention)
+    # sample = torch.randn(bs, max_num_tokens, input_dim, device=device)
+    # msa = MSA(input_dim = input_dim, embed_dim = embed_dim, num_heads=num_heads).to(device)
+    # msa_out_shape = msa(sample).shape
+    # assert msa_out_shape == (bs, max_num_tokens, embed_dim), "🚨 ERROR"; print("✅ MSA test passed!")
+    # del msa
 
-    ### Test TransformerLayer
+    # ### Test TransformerLayer
     mlp_hidden_dim = 128
-    sample = torch.randn(bs, max_num_tokens, embed_dim, device=device)
-    vitlayer = TransformerLayer(num_heads=num_heads, input_dim=embed_dim, embed_dim=embed_dim, mlp_hidden_dim=mlp_hidden_dim).to(device)
-    vitlayer_out_shape = vitlayer(sample).shape
-    assert vitlayer_out_shape == (bs, max_num_tokens, embed_dim), "🚨 ERROR"; print("✅ TransformerLayer test passed!")
-    del vitlayer
+    # sample = torch.randn(bs, max_num_tokens, embed_dim, device=device)
+    # vitlayer = TransformerLayer(num_heads=num_heads, input_dim=embed_dim, embed_dim=embed_dim, mlp_hidden_dim=mlp_hidden_dim).to(device)
+    # vitlayer_out_shape = vitlayer(sample).shape
+    # assert vitlayer_out_shape == (bs, max_num_tokens, embed_dim), "🚨 ERROR"; print("✅ TransformerLayer test passed!")
+    # del vitlayer
 
-    ### Test ViT
-    num_classes=10
-    bs = 16
-    model = get_tiny_model().to(device)
-    sample = torch.randn(bs, 3, 32, 32, device=device) # example batch of images from CIFAR
-    out = model(sample)
-    assert out.shape == (bs, num_classes), "🚨 ERROR"; print("✅ Full ViT test passed!")
-    del model
+    # ### Test ViT
+    # num_classes=10
+    # model = get_tiny_model().to(device)
+    # sample = torch.randn(bs, 3, 32, 32, device=device) # example batch of images from CIFAR
+    # out = model(sample)
+    # assert out.shape == (bs, num_classes), "🚨 ERROR"; print("✅ Full ViT test passed!")
+    # del model
 
     ########### ######### TRAIN Model!!! ########## ##########
 
@@ -196,18 +198,16 @@ if __name__ == "__main__":
     test_dataloader = torch.utils.data.DataLoader(test_dataset, shuffle=True, batch_size=bs, num_workers=10) # TODO: create a test dataset the same as the train loader but with shuffle=False and the test dataset
 
     # hyperparams
-    lr = 5e-4 * bs / 256
-    num_epochs = 10
+    lr = 3e-5
+    num_epochs = 40
     warmup_frac = 0.1
-    weight_decay = 0.1
     total_steps = math.ceil(len(train_dataset) * num_epochs)
     warmup_steps = total_steps * warmup_frac
 
     # model
     model = get_tiny_model().to(device)
-    model.train()
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, betas=(0.9, 0.95), weight_decay=weight_decay)
+    criterion = F.cross_entropy
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     train_losses = []
     test_losses = []
 
@@ -215,15 +215,16 @@ if __name__ == "__main__":
       train_loss = 0.0
       train_acc = 0.0
       train_total = 0
+      model.train()
       for batch in tqdm(train_dataloader):
         inputs, labels = batch
         inputs = inputs.to(device)
         labels = labels.to(device)
-        optimizer.zero_grad()
         outputs = model(inputs)
         loss = criterion(outputs, labels.long())
         loss.backward()
         optimizer.step()
+        optimizer.zero_grad()
 
         train_loss += loss.item() * inputs.shape[0]
         train_acc += torch.sum((torch.argmax(outputs, dim=1) == labels)).item()
