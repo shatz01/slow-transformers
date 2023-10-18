@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+import torch.nn.functional as F
 from tqdm import tqdm
 import math
 
@@ -151,7 +152,7 @@ def get_small_model(vocab_size=100, num_classes=10):
 if __name__ == "__main__":
     print("🐌 running slowly!...")
 
-    bs = 8
+    bs = 128
     max_num_tokens = 50
     input_dim = 32
     embed_dim = 100
@@ -174,7 +175,6 @@ if __name__ == "__main__":
 
     ### Test LanguageTransformer
     num_classes=10
-    bs = 128
     model = get_tiny_model(vocab_size=100, num_classes=num_classes).to(device)
     sample = torch.randint(0, 100, (bs, max_num_tokens), device=device)
     out = model(sample)
@@ -195,14 +195,12 @@ if __name__ == "__main__":
     test_dataloader = torch.utils.data.DataLoader(tokenized_datasets["test"], batch_size=bs, collate_fn=data_collator, num_workers=10)
 
     # hyperparams
-    lr = 5e-4 * bs / 256
+    lr = 3e-4
     num_epochs = 10
-    warmup_frac = 0.1
 
     # model
     model = get_tiny_model(vocab_size=len(tokenizer.get_vocab()), num_classes=10).to(device)
-    model.train()
-    criterion = nn.CrossEntropyLoss()
+    criterion = F.cross_entropy
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     train_losses = []
     test_losses = []
@@ -211,6 +209,7 @@ if __name__ == "__main__":
       train_loss = 0.0
       train_acc = 0.0
       train_total = 0
+      model.train()
       for batch in tqdm(train_dataloader):
         inputs = batch['input_ids'].to(device)
         labels = batch['labels'].to(device)

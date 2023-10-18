@@ -16,6 +16,7 @@ pip install -r requirements.txt
 
 # Supported Models
 - [x] ViT
+- [ ] SimpleViT
 - [x] Language Classification Transformer
 - [ ] Encoder-decoder model (generative)
 
@@ -32,3 +33,5 @@ pip install -r requirements.txt
 - jax?
 - resnet & hyena for comparison???
 - support m1
+- a script to run every model on every possible dataset and record everything in wandb (use hf trainer though)
+- also put datasets/dataloading entirely in file (move cifar from ./data to slow_vit.py, similar to hw_vit.py)

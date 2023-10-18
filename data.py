@@ -1,26 +1,18 @@
 import torch
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
 import torchvision.transforms as transforms
 import torchvision
-import math
-import torch.optim as optim
-import torchtext
-
-from datasets import load_dataset
-from tokenizers import Tokenizer
-from tokenizers.models import BPE
-from tokenizers.trainers import BpeTrainer
-from tokenizers.pre_tokenizers import Whitespace
-
-
 
 class Cifar10Dataset(Dataset):
     def __init__(self, train):
-        self.cifar10_mean = torch.tensor([0.49139968, 0.48215827, 0.44653124])
-        self.cifar10_std = torch.tensor([0.24703233, 0.24348505, 0.26158768])
+        # self.cifar10_mean = torch.tensor([0.49139968, 0.48215827, 0.44653124])
+        # self.cifar10_std = torch.tensor([0.24703233, 0.24348505, 0.26158768])
+        self.cifar10_mean = torch.tensor([0.49139968, 0.48215841, 0.44653091])
+        self.cifar10_std = torch.tensor([0.24703223, 0.24348513, 0.26158784])
         self.transform = transforms.Compose([
                                                 transforms.Resize(40),
                                                 transforms.RandomCrop(32),
+                                                transforms.RandomResizedCrop((32,32),scale=(0.8,1.0),ratio=(0.9,1.1)),
                                                 transforms.RandomHorizontalFlip(),
                                                 transforms.ToTensor(),
                                                 transforms.Normalize(self.cifar10_mean, self.cifar10_std)
